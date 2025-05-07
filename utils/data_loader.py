@@ -1,5 +1,6 @@
 import torch
 import json
+from transformers import BertTokenizer
 
 class REDataset(torch.utils.data.Dataset):
     def __init__(self, file_path, tokenizer):
@@ -19,8 +20,9 @@ class REDataset(torch.utils.data.Dataset):
             'scene': 9,
             'no_relation': 10
         }
-        # 假设这里添加了关系标签到ID的映射
+        # 定义关系标签到ID的映射
         self.relation2id = {
+            # 这里需要根据 DuIE 数据集的关系类型进行修改
             'works_at': 0,
             'wrote': 1,
             'played_in': 2,
@@ -33,9 +35,10 @@ class REDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         sample = self.data[idx]
         text = sample['text']
+        label = sample['label']
+        label_id = self.label2id[label]
         entities = sample['entities']
-        relation = sample.get('relation', 'no_relation')
-        relation_id = self.relation2id[relation]
+        relations = sample['relations']
 
         # 假设 entities 是一个包含实体信息的列表，每个实体有 'start' 和 'end' 字段
         if len(entities) >= 2:
@@ -53,9 +56,14 @@ class REDataset(torch.utils.data.Dataset):
             e1_pos = torch.tensor([0])
             e2_pos = torch.tensor([1])
 
+        # 假设每个样本有一个主要的关系
+        relation = relations[0]['predicate'] if relations else 'no_relation'
+        relation_id = self.relation2id[relation]
+
         return {
             'input_ids': input_ids,
             'e1_pos': e1_pos,
             'e2_pos': e2_pos,
+            'label': label_id,
             'relation': relation_id
         }
