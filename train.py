@@ -1,19 +1,16 @@
 import torch
-from torch import nn, optim
+from torch import nn
 from transformers import BertTokenizer
 from torch.utils.data import DataLoader
 from utils.evaluate import evaluate
 from models.cnn_model import RE_CNN
+from utils.Data_Conversion import convert_duie_to_re  # 替换为新的数据转换函数
 from utils.data_loader import REDataset
-from utils.Data_Conversion import convert_cluener_to_re
-import matplotlib.pyplot as plt
 
-from imblearn.over_sampling import SMOTE
-import numpy as np
 
-# 转换 CLUENER 数据为关系抽取数据
-convert_cluener_to_re('data/cluener_public/train.json', 're_train.json')
-convert_cluener_to_re('data/cluener_public/dev.json', 're_val.json')
+# 转换 DuIE 数据为关系抽取数据
+convert_duie_to_re('data/duie_train.json', 're_train.json')
+convert_duie_to_re('data/duie_dev.json', 're_val.json')
 
 # 初始化组件
 # 指定本地模型路径
@@ -27,7 +24,8 @@ val_dataloader = DataLoader(val_dataset, batch_size=32, shuffle=False)
 
 model = RE_CNN(
     vocab_size=tokenizer.vocab_size,
-    num_classes=len(train_dataset.label2id)
+    num_classes=len(train_dataset.label2id),
+    num_relations=len(train_dataset.relation2id)  # 新增关系类别数量
 )
 
 # 检查 CUDA 是否可用，并将模型移动到 GPU 上
@@ -35,28 +33,29 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.to(device)
 
 # 训练配置
-criterion = nn.CrossEntropyLoss().to(device)  # 将损失函数移动到 GPU 上
+optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
+entity_criterion = nn.CrossEntropyLoss().to(device)
+relation_criterion = nn.CrossEntropyLoss().to(device)
 
 # 初始化最佳 F1 分数和最佳模型路径
 best_val_f1 = 0
 best_model_path = "best_model.pth"
 
-
-# 定义损失函数和优化器
-entity_criterion = nn.CrossEntropyLoss()
-relation_criterion = nn.CrossEntropyLoss()
-optimizer = optim.AdamW(model.parameters(), lr=0.001)
-
-
-num_epochs = 10
-for epoch in range(num_epochs):
+# 训练循环
+for epoch in range(10):
     model.train()
     total_loss = 0
+
     for batch in train_dataloader:
+        # 将所有输入数据移动到 GPU 上
         inputs = {k: v.to(device) for k, v in batch.items()}
 
         optimizer.zero_grad()
-        entity_logits, relation_logits = model(inputs["input_ids"], inputs["e1_pos"], inputs["e2_pos"])
+        entity_logits, relation_logits = model(
+            inputs["input_ids"],
+            inputs["e1_pos"],
+            inputs["e2_pos"]
+        )
 
         entity_loss = entity_criterion(entity_logits, inputs["label"])
         relation_loss = relation_criterion(relation_logits, inputs["relation"])
@@ -66,12 +65,11 @@ for epoch in range(num_epochs):
         optimizer.step()
 
         total_loss += loss.item()
-
     print(f"Epoch {epoch + 1} Loss: {total_loss / len(train_dataloader):.4f}")
 
     # 使用验证集评估模型
     model.eval()
-    val_accuracy, val_precision, val_recall, val_f1, precision_dict, recall_dict, pr_auc_dict = evaluate(model, val_dataloader, device)
+    val_accuracy, val_precision, val_recall, val_f1 = evaluate(model, val_dataloader, device)
     print(
         f"Epoch {epoch + 1} Validation Evaluation - Accuracy: {val_accuracy:.4f}, Precision: {val_precision:.4f}, Recall: {val_recall:.4f}, F1: {val_f1:.4f}")
 
@@ -82,20 +80,5 @@ for epoch in range(num_epochs):
         print(f"Best model saved at Epoch {epoch + 1} with F1 score: {best_val_f1:.4f}")
 
 # 训练结束后，加载最佳模型
-model.load_state_dict(torch.load(best_model_path, weights_only=True))
+model.load_state_dict(torch.load(best_model_path))
 print(f"Loaded best model with F1 score: {best_val_f1:.4f}")
-
-# 绘制 PR 曲线
-num_classes = len(train_dataset.label2id)
-plt.figure()
-for i in range(num_classes):
-    if i in precision_dict and i in recall_dict:
-        plt.plot(recall_dict[i], precision_dict[i], label=f'PR curve (area = {pr_auc_dict[i]:.2f}) for class {i}')
-
-plt.xlim([0.0, 1.0])
-plt.ylim([0.0, 1.05])
-plt.xlabel('Recall')
-plt.ylabel('Precision')
-plt.title('Precision-Recall Curve')
-plt.legend(loc="lower left")
-plt.show()
