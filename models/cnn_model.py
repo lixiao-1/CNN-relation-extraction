@@ -1,15 +1,15 @@
 import torch
 import torch.nn as nn
 
-
 class RE_CNN(nn.Module):
     def __init__(self,
                  vocab_size=21128,
                  embed_dim=200,
                  pos_dim=50,
-                 num_filters=512,  # 增加过滤器数量
-                 kernel_sizes=[3, 5, 7],  # 增加卷积核大小
-                 num_classes=10):
+                 num_filters=512,
+                 kernel_sizes=[3, 5, 7],
+                 num_classes=11,
+                 num_relations=4):
         super().__init__()
 
         # 词嵌入层
@@ -27,8 +27,11 @@ class RE_CNN(nn.Module):
             ) for k in kernel_sizes
         ])
 
-        # 分类层
-        self.classifier = nn.Linear(num_filters * len(kernel_sizes), num_classes)
+        # 实体分类层
+        self.entity_classifier = nn.Linear(num_filters * len(kernel_sizes), num_classes)
+
+        # 关系分类层
+        self.relation_classifier = nn.Linear(num_filters * len(kernel_sizes), num_relations)
 
     def forward(self, input_ids, e1_pos, e2_pos):
         batch_size = input_ids.size(0)
@@ -59,7 +62,13 @@ class RE_CNN(nn.Module):
             pooled = conv_out.max(dim=2)[0]  # 全局最大池化
             conv_outs.append(pooled)
 
-        # 分类
+        # 特征拼接
         features = torch.cat(conv_outs, dim=1)  # [B, F*K]
-        logits = self.classifier(features)
-        return logits
+
+        # 实体分类
+        entity_logits = self.entity_classifier(features)
+
+        # 关系分类
+        relation_logits = self.relation_classifier(features)
+
+        return entity_logits, relation_logits
