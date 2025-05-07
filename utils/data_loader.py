@@ -5,25 +5,22 @@ from transformers import BertTokenizer
 class REDataset(torch.utils.data.Dataset):
     def __init__(self, file_path, tokenizer):
         with open(file_path, 'r', encoding='utf-8') as f:
-            try:
-                self.data = json.load(f)
-            except json.JSONDecodeError as e:
-                print(f"Error decoding JSON file: {e}")
-                self.data = []
+            self.data = []
+            for line in f:
+                try:
+                    sample = json.loads(line)
+                    self.data.append(sample)
+                except json.JSONDecodeError:
+                    print(f"Error decoding line: {line}")
+
         self.tokenizer = tokenizer
-        self.label2id = {
-            'address': 0,
-            'book': 1,
-            'company': 2,
-            'game': 3,
-            'government': 4,
-            'movie': 5,
-            'name': 6,
-            'organization': 7,
-            'position': 8,
-            'scene': 9,
-            'no_relation': 10
-        }
+        # 假设从 duie_schema 中获取所有关系类型
+        schema_path = 'data/duie_schema.json'  # 根据实际路径修改
+        with open(schema_path, 'r', encoding='utf-8') as f:
+            schema = json.load(f)
+        relations = [item['predicate'] for item in schema]
+        self.label2id = {relation: idx for idx, relation in enumerate(relations)}
+        self.label2id['no_relation'] = len(relations)
 
     def __len__(self):
         return len(self.data)
@@ -31,25 +28,33 @@ class REDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         sample = self.data[idx]
         text = sample['text']
-        label = sample['label']
-        label_id = self.label2id[label]
-        entities = sample['entities']
+        spo_list = sample.get('spo_list', [])
+        if spo_list:
+            # 取第一个三元组作为示例，可根据需求修改
+            spo = spo_list[0]
+            subject = spo['subject']
+            object_ = spo['object']['@value']
+            predicate = spo['predicate']
+            label_id = self.label2id.get(predicate, self.label2id['no_relation'])
 
-        # 假设 entities 是一个包含实体信息的列表，每个实体有 'start' 和 'end' 字段
-        if len(entities) >= 2:
-            e1_start = entities[0]['start']
-            e2_start = entities[1]['start']
-            encoding = self.tokenizer(text, return_tensors='pt', padding='max_length', truncation=True, max_length=128)
-            input_ids = encoding['input_ids'].squeeze()
-            # 找到实体在 input_ids 中的位置
-            e1_pos = torch.tensor([e1_start])
-            e2_pos = torch.tensor([e2_start])
+            subject_start = text.find(subject)
+            object_start = text.find(object_)
+
+            if subject_start != -1 and object_start != -1:
+                e1_start = subject_start
+                e2_start = object_start
+            else:
+                e1_start = 0
+                e2_start = 1
         else:
-            # 如果实体数量不足，设置默认值
-            encoding = self.tokenizer(text, return_tensors='pt', padding='max_length', truncation=True, max_length=128)
-            input_ids = encoding['input_ids'].squeeze()
-            e1_pos = torch.tensor([0])
-            e2_pos = torch.tensor([1])
+            label_id = self.label2id['no_relation']
+            e1_start = 0
+            e2_start = 1
+
+        encoding = self.tokenizer(text, return_tensors='pt', padding='max_length', truncation=True, max_length=128)
+        input_ids = encoding['input_ids'].squeeze()
+        e1_pos = torch.tensor([e1_start])
+        e2_pos = torch.tensor([e2_start])
 
         return {
             'input_ids': input_ids,
