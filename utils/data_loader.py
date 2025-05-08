@@ -1,64 +1,40 @@
-import torch
 import json
+import torch
+from torch.utils.data import Dataset
 from transformers import BertTokenizer
 
-class REDataset(torch.utils.data.Dataset):
-    def __init__(self, file_path, tokenizer):
-        with open(file_path, 'r', encoding='utf-8') as f:
-            self.data = []
-            for line in f:
-                try:
-                    sample = json.loads(line)
-                    self.data.append(sample)
-                except json.JSONDecodeError:
-                    print(f"Error decoding line: {line}")
-
+class REDataset(Dataset):
+    def __init__(self, file_path, tokenizer, label2id):
         self.tokenizer = tokenizer
-        # 假设从 duie_schema 中获取所有关系类型
-        schema_path = 'data/duie_schema.json'  # 根据实际路径修改
-        with open(schema_path, 'r', encoding='utf-8') as f:
-            schema = json.load(f)
-        relations = [item['predicate'] for item in schema]
-        self.label2id = {relation: idx for idx, relation in enumerate(relations)}
-        self.label2id['no_relation'] = len(relations)
+        self.data = []
+        self.label2id = label2id
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                for idx, item in enumerate(data):
+                    text = item['text']
+                    spo_list = item.get('spo_list', [])
+                    for spo in spo_list:
+                        predicate = spo['predicate']
+                        if predicate not in self.label2id:
+                            print(f"Warning: Label {predicate} not found in label2id mapping for item {idx} of {file_path}. Skipping...")
+                            continue
+                        encoding = self.tokenizer(text, return_tensors='pt', padding='max_length', truncation=True, max_length=128)
+                        input_ids = encoding['input_ids'].squeeze(0)
+                        attention_mask = encoding['attention_mask'].squeeze(0)
+                        label_id = torch.tensor(self.label2id[predicate])
+                        self.data.append({
+                            'input_ids': input_ids,
+                            'attention_mask': attention_mask,
+                            'label': label_id
+                        })
+        except FileNotFoundError:
+            print(f"Error: The file {file_path} was not found.")
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON from {file_path}: {e}")
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        sample = self.data[idx]
-        text = sample['text']
-        spo_list = sample.get('spo_list', [])
-        if spo_list:
-            # 取第一个三元组作为示例，可根据需求修改
-            spo = spo_list[0]
-            subject = spo['subject']
-            object_ = spo['object']['@value']
-            predicate = spo['predicate']
-            label_id = self.label2id.get(predicate, self.label2id['no_relation'])
-
-            subject_start = text.find(subject)
-            object_start = text.find(object_)
-
-            if subject_start != -1 and object_start != -1:
-                e1_start = subject_start
-                e2_start = object_start
-            else:
-                e1_start = 0
-                e2_start = 1
-        else:
-            label_id = self.label2id['no_relation']
-            e1_start = 0
-            e2_start = 1
-
-        encoding = self.tokenizer(text, return_tensors='pt', padding='max_length', truncation=True, max_length=128)
-        input_ids = encoding['input_ids'].squeeze()
-        e1_pos = torch.tensor([e1_start])
-        e2_pos = torch.tensor([e2_start])
-
-        return {
-            'input_ids': input_ids,
-            'e1_pos': e1_pos,
-            'e2_pos': e2_pos,
-            'label': label_id
-        }
+        return self.data[idx]
