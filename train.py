@@ -1,7 +1,8 @@
 import torch
 from torch import nn
 from transformers import BertTokenizer
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
+import random
 from utils.evaluate import evaluate
 from models.cnn_model import RE_CNN
 from utils.data_loader import REDataset
@@ -28,14 +29,20 @@ train_dataset = REDataset("data/duie2.0/train.json", tokenizer, label2id)
 if len(train_dataset) == 0:
     print("Error: The training dataset is empty after filtering invalid items. Please check the data.")
 else:
-    train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    # 随机选取 3.4 万条数据作为新的训练集
+    train_indices = random.sample(range(len(train_dataset)), 34000)
+    train_subset = Subset(train_dataset, train_indices)
+    train_dataloader = DataLoader(train_subset, batch_size=64, shuffle=True)
 
     # 测试集
     test_dataset = REDataset("data/duie2.0/dev.json", tokenizer, label2id)
     if len(test_dataset) == 0:
         print("Error: The test dataset is empty after filtering invalid items. Please check the data.")
     else:
-        test_dataloader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+        # 随机选取 2000 条数据作为新的测试集
+        test_indices = random.sample(range(len(test_dataset)), 2000)
+        test_subset = Subset(test_dataset, test_indices)
+        test_dataloader = DataLoader(test_subset, batch_size=32, shuffle=False)
 
         model = RE_CNN(
             vocab_size=tokenizer.vocab_size,
@@ -58,6 +65,8 @@ else:
         for epoch in range(10):
             model.train()
             total_loss = 0
+            all_train_preds = []
+            all_train_labels = []
 
             for batch in train_dataloader:
                 # 将所有输入数据移动到 GPU 上
@@ -70,7 +79,13 @@ else:
                 optimizer.step()
 
                 total_loss += loss.item()
-            print(f"Epoch {epoch + 1} Loss: {total_loss / len(train_dataloader):.4f}")
+                preds = torch.argmax(outputs, dim=1)
+                all_train_preds.extend(preds.cpu().tolist())
+                all_train_labels.extend(inputs["label"].cpu().tolist())
+
+            train_loss = total_loss / len(train_dataloader)
+            train_accuracy = sum([1 for i in range(len(all_train_preds)) if all_train_preds[i] == all_train_labels[i]]) / len(all_train_preds)
+            print(f"Epoch {epoch + 1} Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.4f}")
 
             # 使用测试集评估模型
             model.eval()
